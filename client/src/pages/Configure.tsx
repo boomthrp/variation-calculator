@@ -13,6 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { useProject } from "@/contexts/ProjectContext";
 import { useLocation } from "wouter";
+import { extractFeatures } from "@/lib/variationUtils";
 import type { Feature } from "@/lib/types";
 
 export default function ConfigurePage() {
@@ -30,6 +31,26 @@ export default function ConfigurePage() {
     }
   }, [state.importedData]);
 
+  // Re-extract features when featureColumn or startRow changes
+  useEffect(() => {
+    if (state.importedData && state.importedData.rawData) {
+      try {
+        const updatedFeatures = extractFeatures(
+          state.importedData.rawData,
+          {
+            featureColumn,
+            startRow,
+            startDataColumn,
+            selectedFeatures: [],
+          }
+        );
+        setFeatures(updatedFeatures);
+      } catch (error) {
+        console.error("Error extracting features:", error);
+      }
+    }
+  }, [featureColumn, startRow, state.importedData]);
+
   // Filter features based on search
   const filteredFeatures = useMemo(() => {
     if (!searchQuery) return features;
@@ -45,26 +66,45 @@ export default function ConfigurePage() {
 
   const handleToggleFeature = (featureName: string) => {
     setFeatures(
-      features.map((f) =>
-        f.name === featureName ? { ...f, isSelected: !f.isSelected } : f
-      )
+      features.map((f) => {
+        if (f.name === featureName) {
+          const newIsSelected = !f.isSelected;
+          return {
+            ...f,
+            isSelected: newIsSelected,
+            // When toggling feature, also toggle all items
+            items: f.items.map((item) => ({
+              ...item,
+              isSelected: newIsSelected,
+            })),
+          };
+        }
+        return f;
+      })
     );
   };
 
   const handleToggleItem = (featureName: string, itemName: string) => {
     setFeatures(
-      features.map((f) =>
-        f.name === featureName
-          ? {
-              ...f,
-              items: f.items.map((item) =>
-                item.name === itemName
-                  ? { ...item, isSelected: !item.isSelected }
-                  : item
-              ),
-            }
-          : f
-      )
+      features.map((f) => {
+        if (f.name === featureName) {
+          const updatedItems = f.items.map((item) =>
+            item.name === itemName
+              ? { ...item, isSelected: !item.isSelected }
+              : item
+          );
+
+          // Update feature selection based on items
+          const hasSelectedItems = updatedItems.some((i) => i.isSelected);
+
+          return {
+            ...f,
+            items: updatedItems,
+            isSelected: hasSelectedItems,
+          };
+        }
+        return f;
+      })
     );
   };
 
@@ -178,7 +218,7 @@ export default function ConfigurePage() {
             </div>
 
             {/* Items List */}
-            {feature.isSelected && (
+            {feature.isSelected && feature.items.length > 0 && (
               <div className="ml-6 space-y-2">
                 {feature.items.map((item) => (
                   <div key={item.name} className="flex items-center gap-3">
@@ -192,6 +232,11 @@ export default function ConfigurePage() {
                   </div>
                 ))}
               </div>
+            )}
+            {feature.isSelected && feature.items.length === 0 && (
+              <p className="ml-6 text-sm text-muted-foreground italic">
+                No items found for this feature
+              </p>
             )}
           </Card>
         ))}
