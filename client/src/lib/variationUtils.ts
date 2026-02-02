@@ -38,47 +38,50 @@ export function extractFeatures(
   rawData: any[][],
   config: {
     featureColumn: string;
+    itemColumn?: string;
     startRow: number;
     startDataColumn: string;
     selectedFeatures: string[];
   }
 ): Feature[] {
   const featureColIndex = columnLetterToIndex(config.featureColumn);
-  const itemColIndex = columnLetterToIndex(config.featureColumn) + 1; // Assume item column is next to feature
+  const itemColIndex = config.itemColumn 
+    ? columnLetterToIndex(config.itemColumn)
+    : featureColIndex + 1; // Default to next column
   const startRowIndex = config.startRow - 1;
 
-  const features: Feature[] = [];
   const featureMap: { [name: string]: Set<string> } = {};
 
   // Extract features and items from data
   for (let i = startRowIndex; i < rawData.length; i++) {
     const row = rawData[i];
-    if (!row || !row[featureColIndex]) break;
+    if (!row || row.length <= featureColIndex) break;
 
-    const featureName = String(row[featureColIndex]).trim();
+    const featureName = String(row[featureColIndex] || "").trim();
     if (!featureName) break;
 
     if (!featureMap[featureName]) {
       featureMap[featureName] = new Set();
     }
 
-    const itemName = String(row[itemColIndex] || "").trim();
-    if (itemName) {
-      featureMap[featureName].add(itemName);
+    // Extract item name
+    if (row.length > itemColIndex) {
+      const itemName = String(row[itemColIndex] || "").trim();
+      if (itemName && itemName !== "") {
+        featureMap[featureName].add(itemName);
+      }
     }
   }
 
   // Convert to Feature array
-  Object.entries(featureMap).forEach(([featureName, items]) => {
-    features.push({
-      name: featureName,
-      items: Array.from(items).map((itemName) => ({
-        name: itemName,
-        isSelected: false,
-      })),
+  const features: Feature[] = Object.entries(featureMap).map(([featureName, items]) => ({
+    name: featureName,
+    items: Array.from(items).map((itemName) => ({
+      name: itemName,
       isSelected: false,
-    });
-  });
+    })),
+    isSelected: false,
+  }));
 
   return features;
 }
@@ -103,7 +106,7 @@ export function extractItemsForFeature(
 
   for (let i = startRowIndex; i < rawData.length; i++) {
     const row = rawData[i];
-    if (!row) break;
+    if (!row || row.length <= featureColIndex) break;
 
     const currentFeature = String(row[featureColIndex] || "").trim();
     if (!currentFeature) break;
@@ -189,6 +192,16 @@ export function analyzeVariations(
     config.startDataColumn
   );
 
+  console.log("Debug analyzeVariations:", {
+    featureColIndex,
+    itemColIndex,
+    startRowIndex,
+    startDataColIndex,
+    endDataColIndex,
+    rawDataLength: rawData.length,
+    variationGroupsCount: variationGroups.length,
+  });
+
   // Extract header rows (before feature data starts)
   const headerRows: any[][] = [];
   for (let i = 0; i < startRowIndex; i++) {
@@ -210,13 +223,26 @@ export function analyzeVariations(
     }
   }
 
+  console.log("Variation labels:", Array.from(variationLabelMap.entries()));
+
   // Extract feature rows - only selected features and items
   const selectedFeatureSet = new Set<string>();
+  const selectedItemsMap = new Map<string, Set<string>>();
+
   for (const group of variationGroups) {
-    Object.keys(group.selectedFeatures).forEach((fname) => {
+    Object.entries(group.selectedFeatures).forEach(([fname, items]) => {
       selectedFeatureSet.add(fname);
+      if (!selectedItemsMap.has(fname)) {
+        selectedItemsMap.set(fname, new Set());
+      }
+      items.forEach((item) => {
+        selectedItemsMap.get(fname)!.add(item);
+      });
     });
   }
+
+  console.log("Selected features:", Array.from(selectedFeatureSet));
+  console.log("Selected items map:", Array.from(selectedItemsMap.entries()));
 
   const featureRows: Array<{
     feature: string;
@@ -226,7 +252,7 @@ export function analyzeVariations(
 
   for (let i = startRowIndex; i < rawData.length; i++) {
     const row = rawData[i];
-    if (!row) break;
+    if (!row || row.length <= featureColIndex) break;
 
     const featureName = String(row[featureColIndex] || "").trim();
     if (!featureName) break;
@@ -237,17 +263,9 @@ export function analyzeVariations(
     const itemName = String(row[itemColIndex] || "").trim();
     if (!itemName) continue;
 
-    // Check if this item is selected in any variation group
-    let isItemSelected = false;
-    for (const group of variationGroups) {
-      const selectedItems = group.selectedFeatures[featureName];
-      if (selectedItems && selectedItems.includes(itemName)) {
-        isItemSelected = true;
-        break;
-      }
-    }
-
-    if (!isItemSelected) continue;
+    // Check if this item is selected
+    const selectedItems = selectedItemsMap.get(featureName);
+    if (!selectedItems || !selectedItems.has(itemName)) continue;
 
     const values = [];
     for (let j = startDataColIndex; j <= endDataColIndex; j++) {
@@ -260,6 +278,8 @@ export function analyzeVariations(
       values,
     });
   }
+
+  console.log("Feature rows extracted:", featureRows.length);
 
   // Generate column patterns
   const colors = [
