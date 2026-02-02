@@ -2,7 +2,7 @@
  * Design Philosophy: Formal Minimal
  * - Multi-step variation group configuration
  * - Feature and item selection per group
- * - Real-time search
+ * - Real-time search with limited display
  */
 
 import { useState, useEffect, useMemo } from "react";
@@ -21,15 +21,16 @@ import { X, Plus } from "lucide-react";
 interface VariationGroupConfig {
   id: string;
   name: string;
-  selectedFeatures: { [featureName: string]: string[] }; // feature name -> selected item names
+  selectedFeatures: { [featureName: string]: string[] };
 }
 
 export default function ConfigurePage() {
   const [, setLocation] = useLocation();
-  const { state, setImportedData } = useProject();
+  const { state, setImportedData, setConfiguration } = useProject();
 
   // Column settings
   const [featureColumn, setFeatureColumn] = useState("M");
+  const [itemColumn, setItemColumn] = useState("N");
   const [startRow, setStartRow] = useState(19);
   const [startDataColumn, setStartDataColumn] = useState("V");
 
@@ -44,6 +45,16 @@ export default function ConfigurePage() {
 
   // Search
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Initialize from state if available (persist data)
+  useEffect(() => {
+    if (state.configuration) {
+      setFeatureColumn(state.configuration.featureColumn || "M");
+      setItemColumn((state.configuration as any).itemColumn || "N");
+      setStartRow(state.configuration.startRow || 19);
+      setStartDataColumn(state.configuration.startDataColumn || "V");
+    }
+  }, []);
 
   // Re-extract features when column settings change
   useEffect(() => {
@@ -66,19 +77,23 @@ export default function ConfigurePage() {
     }
   }, [featureColumn, startRow, state.importedData]);
 
-  // Filter features based on search
+  // Filter features based on search - limit to 16 features (4x4 grid)
   const filteredFeatures = useMemo(() => {
-    if (!searchQuery) return allFeatures;
+    let features = allFeatures;
 
-    const query = searchQuery.toLowerCase();
-    return allFeatures
-      .filter((f) => f.name.toLowerCase().includes(query))
-      .map((feature) => ({
-        ...feature,
-        items: feature.items.filter((item) =>
-          item.name.toLowerCase().includes(query)
-        ),
-      }));
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      features = allFeatures
+        .filter((f) => f.name.toLowerCase().includes(query))
+        .map((feature) => ({
+          ...feature,
+          items: feature.items.filter((item) =>
+            item.name.toLowerCase().includes(query)
+          ),
+        }));
+    }
+
+    return features.slice(0, 16);
   }, [allFeatures, searchQuery]);
 
   // Get active group
@@ -192,7 +207,6 @@ export default function ConfigurePage() {
       return;
     }
 
-    // Validate that each group has at least one feature selected
     const allValid = variationGroups.every(
       (g) => Object.keys(g.selectedFeatures).length > 0
     );
@@ -202,13 +216,20 @@ export default function ConfigurePage() {
       return;
     }
 
-    // Store configuration
     if (state.importedData) {
       setImportedData({
         ...state.importedData,
         features: allFeatures,
       });
     }
+
+    setConfiguration({
+      featureColumn,
+      itemColumn,
+      startRow,
+      startDataColumn,
+      selectedFeatures: [],
+    } as any);
 
     setLocation("/analyze");
   };
@@ -219,7 +240,7 @@ export default function ConfigurePage() {
         <p className="text-muted-foreground">
           No data imported. Please upload a file first.
         </p>
-        <Button onClick={() => setLocation("/")}>Go to Upload</Button>
+        <Button onClick={() => setLocation("/upload")}>Go to Upload</Button>
       </div>
     );
   }
@@ -239,7 +260,7 @@ export default function ConfigurePage() {
       {/* Column Settings */}
       <Card className="p-6 space-y-4">
         <h3 className="font-semibold text-foreground">Column Settings</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm font-medium text-foreground mb-2">
               Feature Column
@@ -248,6 +269,17 @@ export default function ConfigurePage() {
               value={featureColumn}
               onChange={(e) => setFeatureColumn(e.target.value.toUpperCase())}
               placeholder="M"
+              maxLength={2}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-2">
+              Item Column
+            </label>
+            <Input
+              value={itemColumn}
+              onChange={(e) => setItemColumn(e.target.value.toUpperCase())}
+              placeholder="N"
               maxLength={2}
             />
           </div>
@@ -307,7 +339,6 @@ export default function ConfigurePage() {
             ))}
           </div>
 
-          {/* Add Variation Button */}
           <Button
             variant="outline"
             onClick={handleAddVariationGroup}
@@ -346,10 +377,26 @@ export default function ConfigurePage() {
             />
           </div>
 
-          {/* Features List */}
+          {/* Selected Features Summary */}
+          {Object.keys(activeGroup.selectedFeatures).length > 0 && (
+            <div className="p-3 bg-primary/5 border border-primary/20 rounded-lg">
+              <p className="text-xs font-medium text-primary mb-2">
+                📌 Selected Features:
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {Object.keys(activeGroup.selectedFeatures).map((fname) => (
+                  <Badge key={fname} variant="secondary" className="text-xs">
+                    ✓ {fname}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Features List - Grid Layout with Limited Display */}
           <div className="space-y-3">
             <p className="text-sm font-medium text-muted-foreground">
-              Selected: {Object.keys(activeGroup.selectedFeatures).length} feature(s)
+              Available Features ({filteredFeatures.length} shown)
             </p>
 
             {filteredFeatures.length === 0 ? (
@@ -357,67 +404,75 @@ export default function ConfigurePage() {
                 No features found
               </p>
             ) : (
-              filteredFeatures.map((feature) => {
-                const isSelected = activeGroup.selectedFeatures[feature.name];
-                const selectedItems = isSelected || [];
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-96 overflow-y-auto border border-border rounded-lg p-3 bg-background/50">
+                {filteredFeatures.map((feature) => {
+                  const isSelected = activeGroup.selectedFeatures[feature.name];
+                  const selectedItems = isSelected || [];
 
-                return (
-                  <Card key={feature.name} className="p-4">
-                    {/* Feature Header */}
-                    <div className="flex items-center gap-3 mb-3">
-                      <Checkbox
-                        checked={!!isSelected}
-                        onCheckedChange={() => handleToggleFeature(feature.name)}
-                      />
-                      <h4 className="font-medium text-foreground flex-1">
-                        {feature.name}
-                      </h4>
-                      <span className="text-xs text-muted-foreground">
-                        {selectedItems.length} / {feature.items.length}
-                      </span>
-                    </div>
-
-                    {/* Items List */}
-                    {isSelected && feature.items.length > 0 && (
-                      <>
-                        {/* Quick Actions */}
-                        <div className="flex gap-2 mb-3 text-xs">
-                          <button
-                            onClick={() => handleSelectAllItems(feature.name)}
-                            className="text-primary hover:underline"
+                  return (
+                    <Card key={feature.name} className="p-3 relative">
+                      {/* Feature Header */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <Checkbox
+                          checked={!!isSelected}
+                          onCheckedChange={() => handleToggleFeature(feature.name)}
+                        />
+                        <h4 className="font-medium text-sm text-foreground flex-1">
+                          {feature.name}
+                        </h4>
+                        {isSelected && (
+                          <Badge
+                            variant="outline"
+                            className="text-xs bg-primary/10 text-primary border-primary/30"
                           >
-                            Select All
-                          </button>
-                          <span className="text-muted-foreground">•</span>
-                          <button
-                            onClick={() => handleDeselectAllItems(feature.name)}
-                            className="text-primary hover:underline"
-                          >
-                            Deselect All
-                          </button>
-                        </div>
+                            ✓
+                          </Badge>
+                        )}
+                      </div>
 
-                        {/* Items */}
-                        <div className="ml-6 space-y-2">
-                          {feature.items.map((item) => (
-                            <div key={item.name} className="flex items-center gap-3">
-                              <Checkbox
-                                checked={selectedItems.includes(item.name)}
-                                onCheckedChange={() =>
-                                  handleToggleItem(feature.name, item.name)
-                                }
-                              />
-                              <span className="text-sm text-foreground">
-                                {item.name}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                  </Card>
-                );
-              })
+                      {/* Items List */}
+                      {isSelected && feature.items.length > 0 && (
+                        <>
+                          {/* Quick Actions */}
+                          <div className="flex gap-2 mb-2 text-xs">
+                            <button
+                              onClick={() => handleSelectAllItems(feature.name)}
+                              className="text-primary hover:underline"
+                            >
+                              All
+                            </button>
+                            <span className="text-muted-foreground">•</span>
+                            <button
+                              onClick={() => handleDeselectAllItems(feature.name)}
+                              className="text-primary hover:underline"
+                            >
+                              None
+                            </button>
+                          </div>
+
+                          {/* Items */}
+                          <div className="ml-4 space-y-1 max-h-32 overflow-y-auto">
+                            {feature.items.map((item) => (
+                              <div key={item.name} className="flex items-center gap-2">
+                                <Checkbox
+                                  checked={selectedItems.includes(item.name)}
+                                  onCheckedChange={() =>
+                                    handleToggleItem(feature.name, item.name)
+                                  }
+                                  className="w-3 h-3"
+                                />
+                                <span className="text-xs text-foreground">
+                                  {item.name}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </Card>
+                  );
+                })}
+              </div>
             )}
           </div>
         </Card>
@@ -438,7 +493,7 @@ export default function ConfigurePage() {
 
       {/* Actions */}
       <div className="flex justify-between pt-4">
-        <Button variant="outline" onClick={() => setLocation("/")}>
+        <Button variant="outline" onClick={() => setLocation("/upload")}>
           Back
         </Button>
         <Button
