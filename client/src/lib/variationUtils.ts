@@ -44,6 +44,7 @@ export function extractFeatures(
   }
 ): Feature[] {
   const featureColIndex = columnLetterToIndex(config.featureColumn);
+  const itemColIndex = columnLetterToIndex(config.featureColumn) + 1; // Assume item column is next to feature
   const startRowIndex = config.startRow - 1;
 
   const features: Feature[] = [];
@@ -59,6 +60,11 @@ export function extractFeatures(
 
     if (!featureMap[featureName]) {
       featureMap[featureName] = new Set();
+    }
+
+    const itemName = String(row[itemColIndex] || "").trim();
+    if (itemName) {
+      featureMap[featureName].add(itemName);
     }
   }
 
@@ -114,55 +120,6 @@ export function extractItemsForFeature(
 }
 
 /**
- * Generate pattern string for a column based on selected features
- * Pattern: "O|O|-" means first feature has O, second has O, third has -
- */
-export function generatePattern(
-  rawData: any[][],
-  columnIndex: number,
-  config: {
-    featureColumn: string;
-    itemColumn: string;
-    startRow: number;
-  },
-  selectedFeatures: { [featureName: string]: string[] }
-): string {
-  const featureColIndex = columnLetterToIndex(config.featureColumn);
-  const itemColIndex = columnLetterToIndex(config.itemColumn);
-  const startRowIndex = config.startRow - 1;
-
-  const patternParts: string[] = [];
-  const selectedFeatureNames = Object.keys(selectedFeatures);
-
-  // For each selected feature in order
-  for (const featureName of selectedFeatureNames) {
-    const selectedItems = selectedFeatures[featureName];
-
-    // Find rows for this feature
-    let hasMatch = false;
-    for (let i = startRowIndex; i < rawData.length; i++) {
-      const currentFeature = String(rawData[i]?.[featureColIndex] || "").trim();
-      if (!currentFeature) break;
-
-      if (currentFeature === featureName) {
-        const itemName = String(rawData[i]?.[itemColIndex] || "").trim();
-        if (selectedItems.includes(itemName)) {
-          const cellValue = String(rawData[i]?.[columnIndex] || "").trim();
-          if (cellValue === "O" || cellValue === "o") {
-            hasMatch = true;
-            break;
-          }
-        }
-      }
-    }
-
-    patternParts.push(hasMatch ? "O" : "-");
-  }
-
-  return patternParts.join("|");
-}
-
-/**
  * Find all data columns (from startDataColumn to last column with data)
  */
 export function findDataColumnRange(
@@ -200,8 +157,7 @@ export interface AnalysisResult {
   columnPatterns: Array<{
     columnLetter: string;
     gradeName: string;
-    pattern: string;
-    variationGroupId: string | null;
+    variationGroupId: string;
   }>;
   variationGroups: Array<{
     id: string;
@@ -243,7 +199,25 @@ export function analyzeVariations(
     }
   }
 
-  // Extract feature rows
+  // Get variation labels from row before start row (typically row 5 in example)
+  const variationLabelRow = rawData[startRowIndex - 1] || [];
+  const variationLabelMap = new Map<number, string>();
+
+  for (let colIdx = startDataColIndex; colIdx <= endDataColIndex; colIdx++) {
+    const label = String(variationLabelRow[colIdx] || "").trim();
+    if (label) {
+      variationLabelMap.set(colIdx, label);
+    }
+  }
+
+  // Extract feature rows - only selected features and items
+  const selectedFeatureSet = new Set<string>();
+  for (const group of variationGroups) {
+    Object.keys(group.selectedFeatures).forEach((fname) => {
+      selectedFeatureSet.add(fname);
+    });
+  }
+
   const featureRows: Array<{
     feature: string;
     item: string;
@@ -257,8 +231,23 @@ export function analyzeVariations(
     const featureName = String(row[featureColIndex] || "").trim();
     if (!featureName) break;
 
+    // Only include selected features
+    if (!selectedFeatureSet.has(featureName)) continue;
+
     const itemName = String(row[itemColIndex] || "").trim();
     if (!itemName) continue;
+
+    // Check if this item is selected in any variation group
+    let isItemSelected = false;
+    for (const group of variationGroups) {
+      const selectedItems = group.selectedFeatures[featureName];
+      if (selectedItems && selectedItems.includes(itemName)) {
+        isItemSelected = true;
+        break;
+      }
+    }
+
+    if (!isItemSelected) continue;
 
     const values = [];
     for (let j = startDataColIndex; j <= endDataColIndex; j++) {
@@ -272,55 +261,42 @@ export function analyzeVariations(
     });
   }
 
-  // Generate column patterns and assign to variation groups
+  // Generate column patterns
   const colors = [
-    "#FFD700", // Yellow
-    "#9370DB", // Purple
-    "#87CEEB", // Sky Blue
-    "#90EE90", // Light Green
-    "#FFB6C1", // Light Pink
-    "#DEB887", // Burlywood
-    "#F0E68C", // Khaki
-    "#B0E0E6", // Powder Blue
+    "#FFE5E5", // Light red
+    "#E5F3FF", // Light blue
+    "#E5FFE5", // Light green
+    "#FFF9E5", // Light yellow
+    "#F0E5FF", // Light purple
+    "#FFE5F5", // Light pink
+    "#E5FFFF", // Light cyan
+    "#FFE5CC", // Light orange
   ];
 
   const columnPatterns: Array<{
     columnLetter: string;
     gradeName: string;
-    pattern: string;
-    variationGroupId: string | null;
+    variationGroupId: string;
   }> = [];
+
+  // Map variation labels to variation group IDs
+  const labelToGroupMap = new Map<string, string>();
+  for (const group of variationGroups) {
+    labelToGroupMap.set(group.name, group.id);
+  }
 
   for (let colIndex = startDataColIndex; colIndex <= endDataColIndex; colIndex++) {
     const columnLetter = indexToColumnLetter(colIndex);
-    const gradeName = String(rawData[startRowIndex - 1]?.[colIndex] || "").trim();
+    const gradeName = String(rawData[startRowIndex - 2]?.[colIndex] || "").trim(); // Grade name from row before variation labels
+    const variationLabel = variationLabelMap.get(colIndex) || "";
 
-    // Generate patterns for each variation group
-    let matchedGroupId: string | null = null;
-    let matchedPattern = "";
-
-    for (const group of variationGroups) {
-      const pattern = generatePattern(
-        rawData,
-        colIndex,
-        config,
-        group.selectedFeatures
-      );
-
-      if (matchedGroupId === null) {
-        matchedGroupId = group.id;
-        matchedPattern = pattern;
-      } else if (pattern === matchedPattern) {
-        // Pattern matches, keep this group
-        break;
-      }
-    }
+    // Find which variation group this label belongs to
+    let groupId = labelToGroupMap.get(variationLabel) || variationLabel;
 
     columnPatterns.push({
       columnLetter,
       gradeName,
-      pattern: matchedPattern,
-      variationGroupId: matchedGroupId,
+      variationGroupId: groupId,
     });
   }
 

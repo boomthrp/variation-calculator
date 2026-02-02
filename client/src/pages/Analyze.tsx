@@ -210,9 +210,7 @@ export default function AnalyzePage() {
                       <p className="text-sm font-medium text-foreground">
                         {cp.columnLetter}: {cp.gradeName}
                       </p>
-                      <p className="text-xs text-muted-foreground">
-                        Pattern: {cp.pattern}
-                      </p>
+
                     </div>
                   </div>
                 );
