@@ -39,17 +39,17 @@ export default function SimpleLayout({ children }: SimpleLayoutProps) {
             {navItems.map((item) => {
               const isActive = location === item.path;
               return (
-                <Link key={item.path} href={item.path}>
-                  <a
-                    className={cn(
-                      "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
-                      isActive
-                        ? "border-primary text-primary"
-                        : "border-transparent text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    {item.label}
-                  </a>
+                <Link
+                  key={item.path}
+                  href={item.path}
+                  className={cn(
+                    "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
+                    isActive
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {item.label}
                 </Link>
               );
             })}
