@@ -1,27 +1,45 @@
 /**
  * Design Philosophy: Formal Minimal
- * - Clean analysis interface
- * - Variation grouping display
- * - Flexible group management
+ * - Display analysis results
+ * - Show variation patterns and grouping
  */
 
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useProject } from "@/contexts/ProjectContext";
 import { useLocation } from "wouter";
 import { analyzeVariations } from "@/lib/variationUtils";
-import type { VariationGroup } from "@/lib/types";
+import type { AnalysisResult } from "@/lib/variationUtils";
+
+interface VariationGroupConfig {
+  id: string;
+  name: string;
+  selectedFeatures: { [featureName: string]: string[] };
+}
 
 export default function AnalyzePage() {
   const [, setLocation] = useLocation();
-  const { state, setVariationAnalysis } = useProject();
-  const [groups, setGroups] = useState<VariationGroup[]>([]);
-  const [groupNames, setGroupNames] = useState<{ [key: number]: string }>({});
+  const { state } = useProject();
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
+    null
+  );
   const [analyzing, setAnalyzing] = useState(false);
+
+  // Get variation groups from session storage or state
+  const getVariationGroups = (): VariationGroupConfig[] => {
+    try {
+      const stored = sessionStorage.getItem("variationGroups");
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (e) {
+      console.error("Failed to parse variation groups from storage");
+    }
+    return [];
+  };
 
   const handleAnalyze = () => {
     if (!state.importedData || !state.configuration) {
@@ -29,26 +47,28 @@ export default function AnalyzePage() {
       return;
     }
 
+    const variationGroups = getVariationGroups();
+    if (variationGroups.length === 0) {
+      toast.error("No variation groups configured");
+      return;
+    }
+
     setAnalyzing(true);
 
     try {
-      const analysis = analyzeVariations(
+      const result = analyzeVariations(
         state.importedData.rawData,
-        state.configuration,
-        state.importedData.features
+        {
+          featureColumn: state.configuration.featureColumn,
+          itemColumn: (state.configuration as any).itemColumn || "N",
+          startRow: state.configuration.startRow,
+          startDataColumn: state.configuration.startDataColumn,
+        },
+        variationGroups
       );
 
-      setVariationAnalysis(analysis);
-      setGroups(analysis.groups);
-
-      // Initialize group names
-      const names: { [key: number]: string } = {};
-      analysis.groups.forEach((group) => {
-        names[group.id] = group.name;
-      });
-      setGroupNames(names);
-
-      toast.success(`Analysis complete: ${analysis.groups.length} variations`);
+      setAnalysisResult(result);
+      toast.success("Analysis complete");
     } catch (error) {
       toast.error("Analysis failed");
       console.error(error);
@@ -57,28 +77,18 @@ export default function AnalyzePage() {
     }
   };
 
-  const handleUpdateNames = () => {
-    if (!state.variationAnalysis) return;
+  useEffect(() => {
+    // Auto-analyze if not done yet
+    if (!analysisResult && state.importedData && state.configuration) {
+      // Don't auto-analyze, wait for user click
+    }
+  }, [state.importedData, state.configuration]);
 
-    const updatedGroups = groups.map((group) => ({
-      ...group,
-      name: groupNames[group.id] || group.name,
-    }));
-
-    setGroups(updatedGroups);
-    setVariationAnalysis({
-      ...state.variationAnalysis,
-      groups: updatedGroups,
-    });
-
-    toast.success("Names updated");
-  };
-
-  if (!state.importedData) {
+  if (!state.importedData || !state.configuration) {
     return (
       <div className="space-y-4">
         <p className="text-muted-foreground">No data available</p>
-        <Button onClick={() => setLocation("/")}>Go to Upload</Button>
+        <Button onClick={() => setLocation("/upload")}>Go to Upload</Button>
       </div>
     );
   }
@@ -91,7 +101,7 @@ export default function AnalyzePage() {
           Analyze Variations
         </h2>
         <p className="text-muted-foreground">
-          Identify and group variation patterns
+          Review variation patterns and grouping
         </p>
       </div>
 
@@ -100,13 +110,14 @@ export default function AnalyzePage() {
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-semibold text-foreground">
-              {groups.length > 0
-                ? `${groups.length} Variation Groups Found`
+              {analysisResult
+                ? `${analysisResult.variationGroups.length} Variation Groups`
                 : "Ready to Analyze"}
             </h3>
             <p className="text-sm text-muted-foreground mt-1">
-              {state.importedData.features.filter((f) => f.isSelected).length}{" "}
-              features selected
+              {analysisResult
+                ? `${analysisResult.columnPatterns.length} columns analyzed`
+                : "Click Run Analysis to start"}
             </p>
           </div>
           <Button onClick={handleAnalyze} disabled={analyzing}>
@@ -116,34 +127,30 @@ export default function AnalyzePage() {
       </Card>
 
       {/* Results */}
-      {groups.length > 0 && (
+      {analysisResult && (
         <>
           {/* Summary */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card className="p-6">
               <p className="text-sm text-muted-foreground mb-2">
-                Total Variations
+                Variation Groups
               </p>
               <p className="text-3xl font-semibold text-primary">
-                {groups.length}
+                {analysisResult.variationGroups.length}
               </p>
             </Card>
             <Card className="p-6">
               <p className="text-sm text-muted-foreground mb-2">Total Columns</p>
               <p className="text-3xl font-semibold text-primary">
-                {Object.keys(state.variationAnalysis?.columnMappings || {})
-                  .length}
+                {analysisResult.columnPatterns.length}
               </p>
             </Card>
             <Card className="p-6">
               <p className="text-sm text-muted-foreground mb-2">
-                Selected Features
+                Feature Rows
               </p>
               <p className="text-3xl font-semibold text-primary">
-                {
-                  state.importedData.features.filter((f) => f.isSelected)
-                    .length
-                }
+                {analysisResult.featureRows.length}
               </p>
             </Card>
           </div>
@@ -152,52 +159,65 @@ export default function AnalyzePage() {
           <Card className="p-6 space-y-4">
             <h3 className="font-semibold text-foreground">Variation Groups</h3>
 
-            <div className="space-y-4">
-              {groups.map((group) => (
+            <div className="space-y-3">
+              {analysisResult.variationGroups.map((group) => (
                 <div
                   key={group.id}
-                  className="p-4 border border-border rounded-lg space-y-3"
+                  className="p-4 border border-border rounded-lg flex items-center gap-3"
                 >
-                  <div className="flex items-center gap-3">
-                    <Badge variant="outline">Group {group.id}</Badge>
-                    <Input
-                      placeholder="Group name"
-                      value={groupNames[group.id] || ""}
-                      onChange={(e) =>
-                        setGroupNames({
-                          ...groupNames,
-                          [group.id]: e.target.value,
-                        })
-                      }
-                      className="flex-1"
-                    />
-                    <span className="text-sm text-muted-foreground">
-                      {group.patterns.reduce(
-                        (sum, p) => sum + p.columns.length,
-                        0
-                      )}{" "}
+                  <div
+                    className="w-6 h-6 rounded"
+                    style={{ backgroundColor: group.color }}
+                  />
+                  <div className="flex-1">
+                    <p className="font-medium text-foreground">{group.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {
+                        analysisResult.columnPatterns.filter(
+                          (cp) => cp.variationGroupId === group.id
+                        ).length
+                      }{" "}
                       columns
-                    </span>
+                    </p>
                   </div>
-
-                  {/* Pattern Info */}
-                  <div className="text-xs text-muted-foreground space-y-1">
-                    {group.patterns.map((pattern) => (
-                      <div key={pattern.id}>
-                        <p>
-                          Pattern: <code>{pattern.pattern}</code>
-                        </p>
-                        <p>Columns: {pattern.columns.join(", ")}</p>
-                      </div>
-                    ))}
-                  </div>
+                  <Badge variant="outline">{group.id}</Badge>
                 </div>
               ))}
             </div>
+          </Card>
 
-            <Button onClick={handleUpdateNames} className="w-full">
-              Update Names
-            </Button>
+          {/* Column Patterns Preview */}
+          <Card className="p-6 space-y-4">
+            <h3 className="font-semibold text-foreground">
+              Column Patterns (First 10)
+            </h3>
+
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {analysisResult.columnPatterns.slice(0, 10).map((cp) => {
+                const group = analysisResult.variationGroups.find(
+                  (g) => g.id === cp.variationGroupId
+                );
+                return (
+                  <div
+                    key={cp.columnLetter}
+                    className="p-3 border border-border rounded-lg flex items-center gap-3"
+                  >
+                    <div
+                      className="w-4 h-4 rounded"
+                      style={{ backgroundColor: group?.color || "#ccc" }}
+                    />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-foreground">
+                        {cp.columnLetter}: {cp.gradeName}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Pattern: {cp.pattern}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </Card>
         </>
       )}
@@ -209,9 +229,9 @@ export default function AnalyzePage() {
         </Button>
         <Button
           onClick={() => setLocation("/results")}
-          disabled={groups.length === 0}
+          disabled={!analysisResult}
         >
-          View Results
+          View Results Table
         </Button>
       </div>
     </div>

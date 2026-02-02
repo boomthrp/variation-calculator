@@ -231,6 +231,9 @@ export default function ConfigurePage() {
       selectedFeatures: [],
     } as any);
 
+    // Save variation groups to session storage for Analyze page
+    sessionStorage.setItem("variationGroups", JSON.stringify(variationGroups));
+
     setLocation("/analyze");
   };
 

@@ -1,89 +1,76 @@
 /**
  * Design Philosophy: Formal Minimal
- * - Core logic for flexible variation grouping
- * - Support N-way variation grouping (not just MAP/Variant)
+ * - Pattern-based variation grouping
+ * - Support N-way variation grouping
  */
 
-import type {
-  Configuration,
-  Feature,
-  FeatureItem,
-  VariationPattern,
-  VariationGroup,
-  VariationAnalysis,
-} from "./types";
+import type { Feature } from "./types";
 
 /**
- * Convert column number to letters (1->A, 26->Z, 27->AA)
+ * Convert column letter to index (A=0, B=1, ..., Z=25, AA=26, etc.)
  */
-export function numberToLetters(colNum: number): string {
-  let result = "";
-  let n = colNum;
-  while (n > 0) {
-    result = String.fromCharCode(((n - 1) % 26) + 65) + result;
-    n = Math.floor((n - 1) / 26);
+export function columnLetterToIndex(letter: string): number {
+  let index = 0;
+  for (let i = 0; i < letter.length; i++) {
+    index = index * 26 + (letter.charCodeAt(i) - 64);
   }
-  return result;
+  return index - 1;
 }
 
 /**
- * Convert letters to number (A->1, Z->26, AA->27)
+ * Convert index to column letter (0=A, 1=B, ..., 25=Z, 26=AA, etc.)
  */
-export function lettersToNumber(letters: string): number {
-  let result = 0;
-  for (let i = 0; i < letters.length; i++) {
-    result = result * 26 + (letters.charCodeAt(i) - 64);
+export function indexToColumnLetter(index: number): string {
+  let letter = "";
+  index++;
+  while (index > 0) {
+    index--;
+    letter = String.fromCharCode(65 + (index % 26)) + letter;
+    index = Math.floor(index / 26);
   }
-  return result;
+  return letter;
 }
 
 /**
- * Create pattern key from feature values
- */
-export function createPatternKey(values: (string | number)[]): string {
-  return values.map((v) => String(v).trim()).join("|");
-}
-
-/**
- * Extract features from data based on configuration
+ * Extract features and items from Excel data
  */
 export function extractFeatures(
-  data: any[][],
-  config: Configuration
+  rawData: any[][],
+  config: {
+    featureColumn: string;
+    startRow: number;
+    startDataColumn: string;
+    selectedFeatures: string[];
+  }
 ): Feature[] {
-  const featureColIndex = lettersToNumber(config.featureColumn) - 1;
-  const startRow = config.startRow - 1;
+  const featureColIndex = columnLetterToIndex(config.featureColumn);
+  const startRowIndex = config.startRow - 1;
 
   const features: Feature[] = [];
-  const featureMap = new Map<string, FeatureItem[]>();
+  const featureMap: { [name: string]: Set<string> } = {};
 
-  // Scan data to find all features and their items
-  for (let row = startRow; row < data.length; row++) {
-    const featureName = String(data[row]?.[featureColIndex] || "").trim();
+  // Extract features and items from data
+  for (let i = startRowIndex; i < rawData.length; i++) {
+    const row = rawData[i];
+    if (!row || !row[featureColIndex]) break;
 
-    if (!featureName) continue;
+    const featureName = String(row[featureColIndex]).trim();
+    if (!featureName) break;
 
-    // Check if this is a new feature or an item
-    if (!featureMap.has(featureName)) {
-      featureMap.set(featureName, []);
-    }
-
-    // Get item name from the next column (feature column + 1)
-    const itemName = String(data[row]?.[featureColIndex + 1] || "").trim();
-    if (itemName && itemName !== featureName) {
-      featureMap.get(featureName)!.push({
-        name: itemName,
-        isSelected: true,
-      });
+    if (!featureMap[featureName]) {
+      featureMap[featureName] = new Set();
     }
   }
 
   // Convert to Feature array
-  featureMap.forEach((items, featureName) => {
+  Object.entries(featureMap).forEach(([featureName, items]) => {
     features.push({
       name: featureName,
-      items,
-      isSelected: true,
+      items: Array.from(items).map((itemName) => ({
+        name: itemName,
+        isSelected: false,
+      })),
+      isSelected: false,
     });
   });
 
@@ -91,155 +78,263 @@ export function extractFeatures(
 }
 
 /**
- * Get feature rows for analysis
+ * Extract items for a specific feature from Excel data
  */
-function getFeatureRows(
-  data: any[][],
-  features: Feature[],
-  featureColIndex: number,
-  startRow: number
-): number[] {
-  const featureRows: number[] = [];
-  const selectedFeatureNames = features
-    .filter((f) => f.isSelected)
-    .map((f) => f.name);
+export function extractItemsForFeature(
+  rawData: any[][],
+  config: {
+    featureColumn: string;
+    itemColumn: string;
+    startRow: number;
+  },
+  featureName: string
+): string[] {
+  const featureColIndex = columnLetterToIndex(config.featureColumn);
+  const itemColIndex = columnLetterToIndex(config.itemColumn);
+  const startRowIndex = config.startRow - 1;
 
-  for (const feature of features) {
-    if (!feature.isSelected) continue;
+  const items = new Set<string>();
 
-    // Find rows for selected items only
-    for (let row = startRow; row < data.length; row++) {
-      const cellValue = String(data[row]?.[featureColIndex] || "").trim();
+  for (let i = startRowIndex; i < rawData.length; i++) {
+    const row = rawData[i];
+    if (!row) break;
 
-      if (cellValue === feature.name) {
-        // Check if item is selected
-        const itemName = String(data[row]?.[featureColIndex + 1] || "").trim();
-        const item = feature.items.find((i) => i.name === itemName);
+    const currentFeature = String(row[featureColIndex] || "").trim();
+    if (!currentFeature) break;
 
-        if (item?.isSelected) {
-          featureRows.push(row);
+    if (currentFeature === featureName) {
+      const itemName = String(row[itemColIndex] || "").trim();
+      if (itemName) {
+        items.add(itemName);
+      }
+    }
+  }
+
+  return Array.from(items);
+}
+
+/**
+ * Generate pattern string for a column based on selected features
+ * Pattern: "O|O|-" means first feature has O, second has O, third has -
+ */
+export function generatePattern(
+  rawData: any[][],
+  columnIndex: number,
+  config: {
+    featureColumn: string;
+    itemColumn: string;
+    startRow: number;
+  },
+  selectedFeatures: { [featureName: string]: string[] }
+): string {
+  const featureColIndex = columnLetterToIndex(config.featureColumn);
+  const itemColIndex = columnLetterToIndex(config.itemColumn);
+  const startRowIndex = config.startRow - 1;
+
+  const patternParts: string[] = [];
+  const selectedFeatureNames = Object.keys(selectedFeatures);
+
+  // For each selected feature in order
+  for (const featureName of selectedFeatureNames) {
+    const selectedItems = selectedFeatures[featureName];
+
+    // Find rows for this feature
+    let hasMatch = false;
+    for (let i = startRowIndex; i < rawData.length; i++) {
+      const currentFeature = String(rawData[i]?.[featureColIndex] || "").trim();
+      if (!currentFeature) break;
+
+      if (currentFeature === featureName) {
+        const itemName = String(rawData[i]?.[itemColIndex] || "").trim();
+        if (selectedItems.includes(itemName)) {
+          const cellValue = String(rawData[i]?.[columnIndex] || "").trim();
+          if (cellValue === "O" || cellValue === "o") {
+            hasMatch = true;
+            break;
+          }
+        }
+      }
+    }
+
+    patternParts.push(hasMatch ? "O" : "-");
+  }
+
+  return patternParts.join("|");
+}
+
+/**
+ * Find all data columns (from startDataColumn to last column with data)
+ */
+export function findDataColumnRange(
+  rawData: any[][],
+  startDataColumn: string
+): { start: number; end: number } {
+  const startIndex = columnLetterToIndex(startDataColumn);
+  let endIndex = startIndex;
+
+  // Find last column with data
+  for (let i = 0; i < rawData.length; i++) {
+    const row = rawData[i];
+    if (row) {
+      for (let j = row.length - 1; j >= startIndex; j--) {
+        if (row[j] && String(row[j]).trim()) {
+          endIndex = Math.max(endIndex, j);
         }
       }
     }
   }
 
-  return featureRows;
+  return { start: startIndex, end: endIndex };
 }
 
 /**
- * Analyze variations with flexible grouping
+ * Analyze variations and return result data
  */
+export interface AnalysisResult {
+  headerRows: any[][];
+  featureRows: Array<{
+    feature: string;
+    item: string;
+    values: string[];
+  }>;
+  columnPatterns: Array<{
+    columnLetter: string;
+    gradeName: string;
+    pattern: string;
+    variationGroupId: string | null;
+  }>;
+  variationGroups: Array<{
+    id: string;
+    name: string;
+    color: string;
+  }>;
+}
+
 export function analyzeVariations(
-  data: any[][],
-  config: Configuration,
-  features: Feature[]
-): VariationAnalysis {
-  const featureColIndex = lettersToNumber(config.featureColumn) - 1;
-  const startDataColIndex = lettersToNumber(config.startDataColumn) - 1;
-  const startRow = config.startRow - 1;
+  rawData: any[][],
+  config: {
+    featureColumn: string;
+    itemColumn: string;
+    startRow: number;
+    startDataColumn: string;
+  },
+  variationGroups: Array<{
+    id: string;
+    name: string;
+    selectedFeatures: { [featureName: string]: string[] };
+  }>
+): AnalysisResult {
+  const featureColIndex = columnLetterToIndex(config.featureColumn);
+  const itemColIndex = columnLetterToIndex(config.itemColumn);
+  const startRowIndex = config.startRow - 1;
 
-  const patternMap = new Map<string, VariationPattern>();
-  const columnMappings: {
-    [colKey: string]: { groupIds: number[]; patterns: string[] };
-  } = {};
-
-  let patternCounter = 0;
-
-  // Get feature rows to analyze
-  const featureRows = getFeatureRows(data, features, featureColIndex, startRow);
-
-  if (featureRows.length === 0) {
-    return { groups: [], columnMappings: {} };
-  }
-
-  // Analyze each column
-  const numCols = data[0]?.length || 0;
-
-  for (let col = startDataColIndex; col < numCols; col++) {
-    const colKey = numberToLetters(col + 1);
-
-    // Get pattern for this column
-    const values = featureRows.map((row) => data[row]?.[col] ?? "");
-    const pattern = createPatternKey(values);
-
-    // Create or get pattern
-    if (!patternMap.has(pattern)) {
-      const patternId = String(patternCounter);
-      patternMap.set(pattern, {
-        id: patternId,
-        pattern,
-        columns: [],
-        itemNames: featureRows
-          .map((row) => String(data[row]?.[featureColIndex + 1] || "").trim())
-          .filter((name) => name),
-      });
-      patternCounter++;
-    }
-
-    const variationPattern = patternMap.get(pattern)!;
-    variationPattern.columns.push(colKey);
-
-    columnMappings[colKey] = {
-      groupIds: [parseInt(variationPattern.id)],
-      patterns: [pattern],
-    };
-  }
-
-  // Create variation groups
-  const groups: VariationGroup[] = Array.from(patternMap.values()).map(
-    (pattern, index) => ({
-      id: index,
-      name: `Variation ${index + 1}`,
-      patterns: [pattern],
-    })
+  const { start: startDataColIndex, end: endDataColIndex } = findDataColumnRange(
+    rawData,
+    config.startDataColumn
   );
 
+  // Extract header rows (before feature data starts)
+  const headerRows: any[][] = [];
+  for (let i = 0; i < startRowIndex; i++) {
+    if (rawData[i]) {
+      headerRows.push(
+        rawData[i].slice(startDataColIndex, endDataColIndex + 1)
+      );
+    }
+  }
+
+  // Extract feature rows
+  const featureRows: Array<{
+    feature: string;
+    item: string;
+    values: string[];
+  }> = [];
+
+  for (let i = startRowIndex; i < rawData.length; i++) {
+    const row = rawData[i];
+    if (!row) break;
+
+    const featureName = String(row[featureColIndex] || "").trim();
+    if (!featureName) break;
+
+    const itemName = String(row[itemColIndex] || "").trim();
+    if (!itemName) continue;
+
+    const values = [];
+    for (let j = startDataColIndex; j <= endDataColIndex; j++) {
+      values.push(String(row[j] || "").trim());
+    }
+
+    featureRows.push({
+      feature: featureName,
+      item: itemName,
+      values,
+    });
+  }
+
+  // Generate column patterns and assign to variation groups
+  const colors = [
+    "#FFD700", // Yellow
+    "#9370DB", // Purple
+    "#87CEEB", // Sky Blue
+    "#90EE90", // Light Green
+    "#FFB6C1", // Light Pink
+    "#DEB887", // Burlywood
+    "#F0E68C", // Khaki
+    "#B0E0E6", // Powder Blue
+  ];
+
+  const columnPatterns: Array<{
+    columnLetter: string;
+    gradeName: string;
+    pattern: string;
+    variationGroupId: string | null;
+  }> = [];
+
+  for (let colIndex = startDataColIndex; colIndex <= endDataColIndex; colIndex++) {
+    const columnLetter = indexToColumnLetter(colIndex);
+    const gradeName = String(rawData[startRowIndex - 1]?.[colIndex] || "").trim();
+
+    // Generate patterns for each variation group
+    let matchedGroupId: string | null = null;
+    let matchedPattern = "";
+
+    for (const group of variationGroups) {
+      const pattern = generatePattern(
+        rawData,
+        colIndex,
+        config,
+        group.selectedFeatures
+      );
+
+      if (matchedGroupId === null) {
+        matchedGroupId = group.id;
+        matchedPattern = pattern;
+      } else if (pattern === matchedPattern) {
+        // Pattern matches, keep this group
+        break;
+      }
+    }
+
+    columnPatterns.push({
+      columnLetter,
+      gradeName,
+      pattern: matchedPattern,
+      variationGroupId: matchedGroupId,
+    });
+  }
+
+  // Create variation groups with colors
+  const variationGroupsWithColor = variationGroups.map((group, index) => ({
+    id: group.id,
+    name: group.name,
+    color: colors[index % colors.length],
+  }));
+
   return {
-    groups,
-    columnMappings,
+    headerRows,
+    featureRows,
+    columnPatterns,
+    variationGroups: variationGroupsWithColor,
   };
-}
-
-/**
- * Get unique patterns from analysis
- */
-export function getUniquePatterns(analysis: VariationAnalysis): string[] {
-  const patterns = new Set<string>();
-  analysis.groups.forEach((group) => {
-    group.patterns.forEach((pattern) => {
-      patterns.add(pattern.pattern);
-    });
-  });
-  return Array.from(patterns);
-}
-
-/**
- * Export analysis to array format
- */
-export function exportAnalysisToArray(
-  data: any[][],
-  analysis: VariationAnalysis,
-  config: Configuration
-): any[][] {
-  const result = [...data];
-  const startDataColIndex = lettersToNumber(config.startDataColumn) - 1;
-
-  // Add variation group rows
-  result.push([]);
-
-  analysis.groups.forEach((group) => {
-    const groupRow: any[] = new Array(result[0].length).fill("");
-    groupRow[0] = group.name;
-
-    group.patterns.forEach((pattern) => {
-      pattern.columns.forEach((colKey) => {
-        const colIndex = lettersToNumber(colKey) - 1;
-        groupRow[colIndex] = group.id;
-      });
-    });
-
-    result.push(groupRow);
-  });
-
-  return result;
 }
