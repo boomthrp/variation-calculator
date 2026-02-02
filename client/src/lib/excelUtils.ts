@@ -11,19 +11,34 @@ import * as XLSX from "xlsx";
  */
 export async function getExcelSheetNames(file: File): Promise<string[]> {
   return new Promise((resolve, reject) => {
+    // Validate file type
+    if (!file.type.includes('spreadsheet') && !file.type.includes('sheet') && !file.name.match(/\.(xlsx?|xlsm)$/i)) {
+      reject(new Error('Invalid file type. Please upload an Excel file.'));
+      return;
+    }
+
     const reader = new FileReader();
 
     reader.onload = (e) => {
       try {
         const data = e.target?.result;
+        if (!data) {
+          reject(new Error('Failed to read file'));
+          return;
+        }
         const workbook = XLSX.read(data, { type: "binary" });
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          reject(new Error('No sheets found in workbook'));
+          return;
+        }
         resolve(workbook.SheetNames);
       } catch (error) {
-        reject(error);
+        reject(new Error(`Failed to parse Excel file: ${error instanceof Error ? error.message : 'Unknown error'}`));
       }
     };
 
-    reader.onerror = () => reject(reader.error);
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.onabort = () => reject(new Error('File reading aborted'));
     reader.readAsBinaryString(file);
   });
 }
@@ -41,6 +56,11 @@ export async function readExcelSheet(
     reader.onload = (e) => {
       try {
         const data = e.target?.result;
+        if (!data) {
+          reject(new Error('Failed to read file'));
+          return;
+        }
+
         const workbook = XLSX.read(data, { type: "binary" });
 
         if (!workbook.SheetNames.includes(sheetName)) {
@@ -54,13 +74,19 @@ export async function readExcelSheet(
           defval: "",
         }) as any[][];
 
+        if (!jsonData || jsonData.length === 0) {
+          reject(new Error('Sheet is empty'));
+          return;
+        }
+
         resolve(jsonData);
       } catch (error) {
-        reject(error);
+        reject(new Error(`Failed to read sheet: ${error instanceof Error ? error.message : 'Unknown error'}`));
       }
     };
 
-    reader.onerror = () => reject(reader.error);
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.onabort = () => reject(new Error('File reading aborted'));
     reader.readAsBinaryString(file);
   });
 }
@@ -75,7 +101,17 @@ export async function readExcelFile(file: File): Promise<any[][]> {
     reader.onload = (e) => {
       try {
         const data = e.target?.result;
+        if (!data) {
+          reject(new Error('Failed to read file'));
+          return;
+        }
+
         const workbook = XLSX.read(data, { type: "binary" });
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          reject(new Error('No sheets found in workbook'));
+          return;
+        }
+
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
         const jsonData = XLSX.utils.sheet_to_json(worksheet, {
@@ -83,13 +119,19 @@ export async function readExcelFile(file: File): Promise<any[][]> {
           defval: "",
         }) as any[][];
 
+        if (!jsonData || jsonData.length === 0) {
+          reject(new Error('Sheet is empty'));
+          return;
+        }
+
         resolve(jsonData);
       } catch (error) {
-        reject(error);
+        reject(new Error(`Failed to read file: ${error instanceof Error ? error.message : 'Unknown error'}`));
       }
     };
 
-    reader.onerror = () => reject(reader.error);
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.onabort = () => reject(new Error('File reading aborted'));
     reader.readAsBinaryString(file);
   });
 }
