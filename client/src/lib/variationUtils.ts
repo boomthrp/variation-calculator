@@ -2,6 +2,15 @@
  * Design Philosophy: Formal Minimal
  * - Pattern-based variation grouping
  * - Support N-way variation grouping
+ * 
+ * Data Model:
+ * - Base data: 1 Excel file, 1 Worksheet (F-List)
+ * - Metadata rows: before startRow (Grade, Destination, Plant, Model)
+ * - Feature + Item rows: from startRow onwards
+ *   - Feature column: contains feature name or blank (if item of same feature)
+ *   - Item column: contains item name
+ * - Grade columns: from firstGradeColumn onwards (O/- values)
+ * - Variation: rule for grouping columns by pattern
  */
 
 import type { Feature } from "./types";
@@ -33,93 +42,55 @@ export function indexToColumnLetter(index: number): string {
 
 /**
  * Extract features and items from Excel data
+ * Handles blank cells in feature column (items of same feature)
  */
 export function extractFeatures(
   rawData: any[][],
   config: {
     featureColumn: string;
-    itemColumn?: string;
-    startRow: number;
-    startDataColumn: string;
-    selectedFeatures: string[];
-  }
-): Feature[] {
-  const featureColIndex = columnLetterToIndex(config.featureColumn);
-  const itemColIndex = config.itemColumn 
-    ? columnLetterToIndex(config.itemColumn)
-    : featureColIndex + 1; // Default to next column
-  const startRowIndex = config.startRow - 1;
-
-  const featureMap: { [name: string]: Set<string> } = {};
-
-  // Extract features and items from data
-  for (let i = startRowIndex; i < rawData.length; i++) {
-    const row = rawData[i];
-    if (!row || row.length <= featureColIndex) break;
-
-    const featureName = String(row[featureColIndex] || "").trim();
-    if (!featureName) break;
-
-    if (!featureMap[featureName]) {
-      featureMap[featureName] = new Set();
-    }
-
-    // Extract item name
-    if (row.length > itemColIndex) {
-      const itemName = String(row[itemColIndex] || "").trim();
-      if (itemName && itemName !== "") {
-        featureMap[featureName].add(itemName);
-      }
-    }
-  }
-
-  // Convert to Feature array
-  const features: Feature[] = Object.entries(featureMap).map(([featureName, items]) => ({
-    name: featureName,
-    items: Array.from(items).map((itemName) => ({
-      name: itemName,
-      isSelected: false,
-    })),
-    isSelected: false,
-  }));
-
-  return features;
-}
-
-/**
- * Extract items for a specific feature from Excel data
- */
-export function extractItemsForFeature(
-  rawData: any[][],
-  config: {
-    featureColumn: string;
     itemColumn: string;
     startRow: number;
-  },
-  featureName: string
-): string[] {
+  }
+): Feature[] {
   const featureColIndex = columnLetterToIndex(config.featureColumn);
   const itemColIndex = columnLetterToIndex(config.itemColumn);
   const startRowIndex = config.startRow - 1;
 
-  const items = new Set<string>();
+  const featureList: Feature[] = [];
+  let currentFeature: Feature | null = null;
 
+  // Extract features and items from data
   for (let i = startRowIndex; i < rawData.length; i++) {
     const row = rawData[i];
-    if (!row || row.length <= featureColIndex) break;
+    if (!row || row.length <= Math.max(featureColIndex, itemColIndex)) break;
 
-    const currentFeature = String(row[featureColIndex] || "").trim();
-    if (!currentFeature) break;
+    const featureName = String(row[featureColIndex] || "").trim();
+    const itemName = String(row[itemColIndex] || "").trim();
 
-    if (currentFeature === featureName) {
-      const itemName = String(row[itemColIndex] || "").trim();
-      if (itemName) {
-        items.add(itemName);
-      }
+    // Stop if both feature and item are empty
+    if (!featureName && !itemName) break;
+
+    // If feature name is provided, create new feature
+    if (featureName) {
+      currentFeature = {
+        name: featureName,
+        items: [],
+        isSelected: false,
+      };
+      featureList.push(currentFeature);
+    }
+
+    // Add item to current feature
+    if (itemName && currentFeature) {
+      currentFeature.items.push({
+        name: itemName,
+        isSelected: true, // Default: select all items
+      });
     }
   }
 
-  return Array.from(items);
+  console.log("Extracted features:", featureList);
+  return featureList;
 }
 
 /**
@@ -148,6 +119,53 @@ export function findDataColumnRange(
 }
 
 /**
+ * Extract pattern for a single column (feature-item combinations)
+ */
+function extractColumnPattern(
+  rawData: any[][],
+  columnIndex: number,
+  config: {
+    featureColumn: string;
+    itemColumn: string;
+    startRow: number;
+  },
+  selectedFeatures: { [featureName: string]: string[] }
+): string {
+  const featureColIndex = columnLetterToIndex(config.featureColumn);
+  const itemColIndex = columnLetterToIndex(config.itemColumn);
+  const startRowIndex = config.startRow - 1;
+
+  const pattern: string[] = [];
+  let currentFeature: string | null = null;
+
+  for (let i = startRowIndex; i < rawData.length; i++) {
+    const row = rawData[i];
+    if (!row || row.length <= Math.max(featureColIndex, itemColIndex)) break;
+
+    const featureName = String(row[featureColIndex] || "").trim();
+    const itemName = String(row[itemColIndex] || "").trim();
+
+    if (!featureName && !itemName) break;
+
+    // Update current feature
+    if (featureName) {
+      currentFeature = featureName;
+    }
+
+    // Check if this feature-item is selected
+    if (currentFeature && selectedFeatures[currentFeature]) {
+      const selectedItems = selectedFeatures[currentFeature];
+      if (Array.isArray(selectedItems) && selectedItems.includes(itemName)) {
+        const cellValue = String(row[columnIndex] || "").trim();
+        pattern.push(cellValue === "O" ? "O" : "-");
+      }
+    }
+  }
+
+  return pattern.join("");
+}
+
+/**
  * Analyze variations and return result data
  */
 export interface AnalysisResult {
@@ -160,7 +178,8 @@ export interface AnalysisResult {
   columnPatterns: Array<{
     columnLetter: string;
     gradeName: string;
-    variationGroupId: string;
+    variationGroup: string; // A, B, C, etc.
+    backgroundColor: string;
   }>;
   variationGroups: Array<{
     id: string;
@@ -199,7 +218,6 @@ export function analyzeVariations(
     startDataColIndex,
     endDataColIndex,
     rawDataLength: rawData.length,
-    variationGroupsCount: variationGroups.length,
   });
 
   // Extract header rows (before feature data starts)
@@ -212,37 +230,21 @@ export function analyzeVariations(
     }
   }
 
-  // Get variation labels from row before start row (typically row 5 in example)
-  const variationLabelRow = rawData[startRowIndex - 1] || [];
-  const variationLabelMap = new Map<number, string>();
-
-  for (let colIdx = startDataColIndex; colIdx <= endDataColIndex; colIdx++) {
-    const label = String(variationLabelRow[colIdx] || "").trim();
-    if (label) {
-      variationLabelMap.set(colIdx, label);
-    }
-  }
-
-  console.log("Variation labels:", Array.from(variationLabelMap.entries()));
-
   // Extract feature rows - only selected features and items
   const selectedFeatureSet = new Set<string>();
-  const selectedItemsMap = new Map<string, Set<string>>();
+  const selectedItemsMap: { [featureName: string]: Set<string> } = {};
 
   for (const group of variationGroups) {
     Object.entries(group.selectedFeatures).forEach(([fname, items]) => {
       selectedFeatureSet.add(fname);
-      if (!selectedItemsMap.has(fname)) {
-        selectedItemsMap.set(fname, new Set());
+      if (!selectedItemsMap[fname]) {
+        selectedItemsMap[fname] = new Set();
       }
       items.forEach((item) => {
-        selectedItemsMap.get(fname)!.add(item);
+        selectedItemsMap[fname].add(item);
       });
     });
   }
-
-  console.log("Selected features:", Array.from(selectedFeatureSet));
-  console.log("Selected items map:", Array.from(selectedItemsMap.entries()));
 
   const featureRows: Array<{
     feature: string;
@@ -250,21 +252,27 @@ export function analyzeVariations(
     values: string[];
   }> = [];
 
+  let currentFeature: string | null = null;
+
   for (let i = startRowIndex; i < rawData.length; i++) {
     const row = rawData[i];
-    if (!row || row.length <= featureColIndex) break;
+    if (!row || row.length <= Math.max(featureColIndex, itemColIndex)) break;
 
     const featureName = String(row[featureColIndex] || "").trim();
-    if (!featureName) break;
-
-    // Only include selected features
-    if (!selectedFeatureSet.has(featureName)) continue;
-
     const itemName = String(row[itemColIndex] || "").trim();
+
+    if (!featureName && !itemName) break;
+
+    // Update current feature
+    if (featureName) {
+      currentFeature = featureName;
+    }
+
+    // Only include selected features and items
+    if (!currentFeature || !selectedFeatureSet.has(currentFeature)) continue;
     if (!itemName) continue;
 
-    // Check if this item is selected
-    const selectedItems = selectedItemsMap.get(featureName);
+    const selectedItems = selectedItemsMap[currentFeature];
     if (!selectedItems || !selectedItems.has(itemName)) continue;
 
     const values = [];
@@ -273,7 +281,7 @@ export function analyzeVariations(
     }
 
     featureRows.push({
-      feature: featureName,
+      feature: currentFeature,
       item: itemName,
       values,
     });
@@ -281,7 +289,7 @@ export function analyzeVariations(
 
   console.log("Feature rows extracted:", featureRows.length);
 
-  // Generate column patterns
+  // Generate column patterns and group them
   const colors = [
     "#FFE5E5", // Light red
     "#E5F3FF", // Light blue
@@ -293,30 +301,55 @@ export function analyzeVariations(
     "#FFE5CC", // Light orange
   ];
 
+  // Map each column to its pattern
+  const columnPatternMap = new Map<number, string>();
+  const selectedItemsMapForPattern: { [featureName: string]: string[] } = {};
+  for (const [fname, items] of Object.entries(selectedItemsMap)) {
+    selectedItemsMapForPattern[fname] = Array.from(items);
+  }
+  for (let colIndex = startDataColIndex; colIndex <= endDataColIndex; colIndex++) {
+    const pattern = extractColumnPattern(
+      rawData,
+      colIndex,
+      config,
+      selectedItemsMapForPattern
+    );
+    columnPatternMap.set(colIndex, pattern);
+  }
+
+  // Group columns by pattern
+  const patternToGroupMap = new Map<string, string>();
+  let groupCounter = 0;
+  const groupLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+  columnPatternMap.forEach((pattern) => {
+    if (!patternToGroupMap.has(pattern)) {
+      patternToGroupMap.set(pattern, groupLetters[groupCounter % groupLetters.length]);
+      groupCounter++;
+    }
+  });
+
+  // Generate column patterns with group assignments
   const columnPatterns: Array<{
     columnLetter: string;
     gradeName: string;
-    variationGroupId: string;
+    variationGroup: string;
+    backgroundColor: string;
   }> = [];
-
-  // Map variation labels to variation group IDs
-  const labelToGroupMap = new Map<string, string>();
-  for (const group of variationGroups) {
-    labelToGroupMap.set(group.name, group.id);
-  }
 
   for (let colIndex = startDataColIndex; colIndex <= endDataColIndex; colIndex++) {
     const columnLetter = indexToColumnLetter(colIndex);
-    const gradeName = String(rawData[startRowIndex - 2]?.[colIndex] || "").trim(); // Grade name from row before variation labels
-    const variationLabel = variationLabelMap.get(colIndex) || "";
-
-    // Find which variation group this label belongs to
-    let groupId = labelToGroupMap.get(variationLabel) || variationLabel;
+    const gradeName = String(rawData[startRowIndex - 2]?.[colIndex] || "").trim();
+    const pattern = columnPatternMap.get(colIndex) || "";
+    const variationGroup = patternToGroupMap.get(pattern) || "?";
+    const colorIndex = groupLetters.indexOf(variationGroup);
+    const backgroundColor = colors[Math.max(0, colorIndex) % colors.length];
 
     columnPatterns.push({
       columnLetter,
       gradeName,
-      variationGroupId: groupId,
+      variationGroup,
+      backgroundColor,
     });
   }
 

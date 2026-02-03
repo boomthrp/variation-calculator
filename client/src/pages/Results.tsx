@@ -187,7 +187,7 @@ export default function ResultsPage() {
                 </th>
                 {analysisResult.columnPatterns.map((cp) => {
                   const group = analysisResult.variationGroups.find(
-                    (g) => g.id === cp.variationGroupId
+                    (g) => g.id === cp.variationGroup
                   );
                   return (
                     <th
@@ -218,7 +218,7 @@ export default function ResultsPage() {
                   {row.values.map((value, colIdx) => {
                     const cp = analysisResult.columnPatterns[colIdx];
                     const group = analysisResult.variationGroups.find(
-                      (g) => g.id === cp?.variationGroupId
+                      (g) => g.id === cp?.variationGroup
                     );
                     return (
                       <td
@@ -250,7 +250,7 @@ export default function ResultsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {analysisResult.variationGroups.map((group) => {
             const columnCount = analysisResult.columnPatterns.filter(
-              (cp) => cp.variationGroupId === group.id
+              (cp) => cp.variationGroup === group.id
             ).length;
 
             return (

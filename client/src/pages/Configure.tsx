@@ -64,9 +64,8 @@ export default function ConfigurePage() {
           state.importedData.rawData,
           {
             featureColumn,
+            itemColumn,
             startRow,
-            startDataColumn,
-            selectedFeatures: [],
           }
         );
         setAllFeatures(updatedFeatures);

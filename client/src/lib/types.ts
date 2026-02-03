@@ -17,7 +17,7 @@ export interface FeatureItem {
 
 export interface Configuration {
   featureColumn: string; // e.g., "M"
-  itemColumn?: string; // e.g., "N"
+  itemColumn: string; // e.g., "N"
   startRow: number; // e.g., 19
   startDataColumn: string; // e.g., "V"
   selectedFeatures: string[]; // Feature names to include

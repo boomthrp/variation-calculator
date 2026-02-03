@@ -83,9 +83,8 @@ export default function UploadPage() {
       const data = await readExcelSheet(file, selectedSheet);
       const features = extractFeatures(data, {
         featureColumn: "M",
+        itemColumn: "N",
         startRow: 19,
-        startDataColumn: "V",
-        selectedFeatures: [],
       });
 
       setImportedData({
